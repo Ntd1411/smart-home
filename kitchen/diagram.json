@@ -1,0 +1,74 @@
+{
+  "version": 1,
+  "author": "NTD",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-led", "id": "led1", "top": 54, "left": -284.2, "attrs": { "color": "red" } },
+    {
+      "type": "wokwi-lcd1602",
+      "id": "lcd1",
+      "top": -80,
+      "left": 178.4,
+      "attrs": { "pins": "i2c" }
+    },
+    { "type": "wokwi-gas-sensor", "id": "gas1", "top": 242.7, "left": -261.8, "attrs": {} },
+    { "type": "wokwi-dht22", "id": "dht1", "top": -143.7, "left": -101.4, "attrs": {} },
+    {
+      "type": "wokwi-led",
+      "id": "led2",
+      "top": -51.6,
+      "left": -226.6,
+      "attrs": { "color": "white", "flip": "" }
+    },
+    { "type": "wokwi-servo", "id": "servo1", "top": 218.8, "left": 230.4, "attrs": {} },
+    {
+      "type": "wokwi-buzzer",
+      "id": "bz1",
+      "top": 98.4,
+      "left": 203.4,
+      "attrs": { "volume": "0.1" }
+    },
+    {
+      "type": "wokwi-text",
+      "id": "text1",
+      "top": -230.4,
+      "left": -115.2,
+      "attrs": { "text": "=============== KITCHEN ==============\n" }
+    },
+    {
+      "type": "wokwi-pushbutton",
+      "id": "btn1",
+      "top": 35,
+      "left": -182.4,
+      "attrs": { "color": "green", "xray": "1" }
+    }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "gas1:VCC", "esp:3V3", "red", [ "h86.4", "v-250.5" ] ],
+    [ "gas1:GND", "esp:GND.1", "black", [ "h105.6", "v-125.6" ] ],
+    [ "dht1:VCC", "esp:3V3", "red", [ "v0" ] ],
+    [ "dht1:SDA", "esp:27", "blue", [ "v0" ] ],
+    [ "dht1:GND", "esp:GND.1", "black", [ "v0" ] ],
+    [ "lcd1:GND", "esp:GND.3", "black", [ "h-28.8", "v172.8" ] ],
+    [ "lcd1:VCC", "esp:3V3", "red", [ "h-38.4", "v67.3" ] ],
+    [ "lcd1:SDA", "esp:21", "gold", [ "h-48", "v77" ] ],
+    [ "lcd1:SCL", "esp:22", "white", [ "h-57.6", "v67.5" ] ],
+    [ "servo1:GND", "esp:GND.3", "black", [ "h-76.8", "v-182.4" ] ],
+    [ "servo1:V+", "esp:3V3", "red", [ "h-86.4", "v-249.5" ] ],
+    [ "servo1:PWM", "esp:19", "green", [ "h-96", "v-182.2" ] ],
+    [ "gas1:AOUT", "esp:14", "cyan", [ "h115.2", "v-124.8" ] ],
+    [ "bz1:1", "esp:GND.3", "black", [ "v0", "h-76.8", "v-96" ] ],
+    [ "bz1:2", "esp:18", "gray", [ "v9.6", "h-115.6", "v-86.4" ] ],
+    [ "btn1:2.r", "esp:GND.1", "black", [ "h0.2", "v86.6" ] ],
+    [ "btn1:1.r", "esp:12", "violet", [ "v0", "h9.8", "v96" ] ],
+    [ "led2:C", "esp:GND.1", "black", [ "v0" ] ],
+    [ "led2:A", "esp:25", "gold", [ "v0" ] ],
+    [ "led1:C", "esp:GND.1", "black", [ "v0" ] ],
+    [ "led1:A", "esp:26", "gray", [ "v0" ] ],
+    [ "gas1:DOUT", "esp:33", "green", [ "h96", "v-182.7" ] ]
+  ],
+  "dependencies": {}
+}
