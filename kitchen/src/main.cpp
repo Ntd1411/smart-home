@@ -4,17 +4,14 @@
 #include <LiquidCrystal_I2C.h>
 #include <DHT.h>
 #include <ESP32Servo.h>
-#include <WiFiClientSecure.h>
 
 // WiFi & MQTT Configuration
 const char* ssid = "Wokwi-GUEST";
 const char* password = "";
-const char* mqtt_server = "b622b791584b41fdbffce97186daad8c.s1.eu.hivemq.cloud";
-const int mqtt_port = 8883;
-const char* mqtt_username = "admin";
-const char* mqtt_password = "Admin@123";
+const char* mqtt_server = "test.mosquitto.org";  // Public MQTT broker
+const int mqtt_port = 1883;
 
-WiFiClientSecure espClient;
+WiFiClient espClient;
 PubSubClient mqtt(espClient);
 
 // Hardware pins (theo diagram.json kitchen)
@@ -70,6 +67,21 @@ const unsigned long GAS_WARMUP_TIME = 5000;  // 5 giây warm-up cho gas sensor
 
 bool gasSensorReady = false;
 
+// 📥 Subscribe (Nhận lệnh):
+// kitchen/command/led - Điều khiển đèn trắng (ON/OFF/TOGGLE)
+// kitchen/command/alarm - Điều khiển đèn đỏ cảnh báo (ON/OFF/TOGGLE)
+// kitchen/command/fan - Điều khiển quạt/cửa sổ (ON/OFF/TOGGLE)
+// kitchen/command/buzzer - Điều khiển còi (ON/OFF)
+// kitchen/command/auto - Chế độ tự động (ON/OFF/TOGGLE)
+// 📤 Publish (Gửi dữ liệu):
+// kitchen/sensor/temperature - Nhiệt độ
+// kitchen/sensor/humidity - Độ ẩm
+// kitchen/sensor/gas - Phát hiện gas (YES/NO)
+// kitchen/status/led - Trạng thái đèn trắng (ON/OFF)
+// kitchen/status/alarm - Trạng thái cảnh báo (ON/OFF)
+// kitchen/status/fan - Trạng thái quạt (ON/OFF)
+// kitchen/status/auto - Trạng thái chế độ tự động (ON/OFF)
+
 // ========== HELPER FUNCTIONS ==========
 
 void readDHT() {
@@ -87,14 +99,14 @@ void readDHT() {
     
     // Publish if temperature changed by 0.5°C or more
     if (mqtt.connected() && abs(temperature - lastPublishedTemp) >= 0.5) {
-      mqtt.publish("kitchen/temperature", String(temperature, 1).c_str());
+      mqtt.publish("kitchen/sensor/temperature", String(temperature, 1).c_str());
       lastPublishedTemp = temperature;
       Serial.println("  -> Published temperature");
     }
     
     // Publish if humidity changed by 2% or more
     if (mqtt.connected() && abs(humidity - lastPublishedHum) >= 2.0) {
-      mqtt.publish("kitchen/humidity", String((int)humidity).c_str());
+      mqtt.publish("kitchen/sensor/humidity", String((int)humidity).c_str());
       lastPublishedHum = humidity;
       Serial.println("  -> Published humidity");
     }
@@ -120,7 +132,7 @@ void readGasSensor() {
   
   // Publish if gas status changed
   if (mqtt.connected() && gasDetected != lastPublishedGas) {
-    mqtt.publish("kitchen/gas/detected", gasDetected ? "YES" : "NO");
+    mqtt.publish("kitchen/sensor/gas", gasDetected ? "YES" : "NO");
     lastPublishedGas = gasDetected;
     Serial.print("Gas Detected: ");
     Serial.println(gasDetected ? "YES" : "NO");
@@ -133,7 +145,7 @@ void readGasSensor() {
       if (!ledRedStatus) {
         ledRedStatus = true;
         digitalWrite(LED_RED, HIGH);
-        mqtt.publish("kitchen/led/red/status", "ON");
+        mqtt.publish("kitchen/status/alarm", "ON");
       }
       if (!buzzerStatus) {
         buzzerStatus = true;
@@ -142,14 +154,14 @@ void readGasSensor() {
       if (!fanStatus) {
         fanStatus = true;
         windowServo.write(90);  // Mở quạt/cửa sổ
-        mqtt.publish("kitchen/fan/status", "ON");
+        mqtt.publish("kitchen/status/fan", "ON");
       }
     } else {
       // Không có gas: Tắt tất cả cảnh báo
       if (ledRedStatus) {
         ledRedStatus = false;
         digitalWrite(LED_RED, LOW);
-        mqtt.publish("kitchen/led/red/status", "OFF");
+        mqtt.publish("kitchen/status/alarm", "OFF");
       }
       if (buzzerStatus) {
         buzzerStatus = false;
@@ -158,7 +170,7 @@ void readGasSensor() {
       if (fanStatus) {
         fanStatus = false;
         windowServo.write(0);  // Đóng quạt/cửa sổ
-        mqtt.publish("kitchen/fan/status", "OFF");
+        mqtt.publish("kitchen/status/fan", "OFF");
       }
     }
   }
@@ -211,7 +223,7 @@ void handleButton() {
         
         // Publish LED status change
         if (mqtt.connected()) {
-          mqtt.publish("kitchen/led/white/status", ledWhiteStatus ? "ON" : "OFF");
+          mqtt.publish("kitchen/status/led", ledWhiteStatus ? "ON" : "OFF");
           lastPublishedLedWhite = ledWhiteStatus;
           Serial.println("  -> Published LED white status");
         }
@@ -226,13 +238,13 @@ void handleButton() {
 
 void publishAllStatus() {
   if (mqtt.connected()) {
-    mqtt.publish("kitchen/temperature", String(temperature, 1).c_str());
-    mqtt.publish("kitchen/humidity", String((int)humidity).c_str());
-    mqtt.publish("kitchen/gas/detected", gasDetected ? "YES" : "NO");
-    mqtt.publish("kitchen/led/white/status", ledWhiteStatus ? "ON" : "OFF");
-    mqtt.publish("kitchen/led/red/status", ledRedStatus ? "ON" : "OFF");
-    mqtt.publish("kitchen/fan/status", fanStatus ? "ON" : "OFF");
-    mqtt.publish("kitchen/auto", autoMode ? "ON" : "OFF");
+    mqtt.publish("kitchen/sensor/temperature", String(temperature, 1).c_str());
+    mqtt.publish("kitchen/sensor/humidity", String((int)humidity).c_str());
+    mqtt.publish("kitchen/sensor/gas", gasDetected ? "YES" : "NO");
+    mqtt.publish("kitchen/status/led", ledWhiteStatus ? "ON" : "OFF");
+    mqtt.publish("kitchen/status/alarm", ledRedStatus ? "ON" : "OFF");
+    mqtt.publish("kitchen/status/fan", fanStatus ? "ON" : "OFF");
+    mqtt.publish("kitchen/status/auto", autoMode ? "ON" : "OFF");
     
     lastPublishedTemp = temperature;
     lastPublishedHum = humidity;
@@ -259,7 +271,7 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
   String topicStr = String(topic);
   
   // Control LED white
-  if (topicStr == "kitchen/led/white/control") {
+  if (topicStr == "kitchen/command/led") {
     bool oldStatus = ledWhiteStatus;
     if (message == "ON" || message == "1") {
       ledWhiteStatus = true;
@@ -271,13 +283,13 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
     digitalWrite(LED_WHITE, ledWhiteStatus);
     
     if (ledWhiteStatus != oldStatus && mqtt.connected()) {
-      mqtt.publish("kitchen/led/white/status", ledWhiteStatus ? "ON" : "OFF");
+      mqtt.publish("kitchen/status/led", ledWhiteStatus ? "ON" : "OFF");
     }
     updateLCD();
   }
   
   // Control LED red
-  else if (topicStr == "kitchen/led/red/control") {
+  else if (topicStr == "kitchen/command/alarm") {
     bool oldStatus = ledRedStatus;
     if (message == "ON" || message == "1") {
       ledRedStatus = true;
@@ -289,12 +301,12 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
     digitalWrite(LED_RED, ledRedStatus);
     
     if (ledRedStatus != oldStatus && mqtt.connected()) {
-      mqtt.publish("kitchen/led/red/status", ledRedStatus ? "ON" : "OFF");
+      mqtt.publish("kitchen/status/alarm", ledRedStatus ? "ON" : "OFF");
     }
   }
   
   // Control fan/servo
-  else if (topicStr == "kitchen/fan/control") {
+  else if (topicStr == "kitchen/command/fan") {
     bool oldStatus = fanStatus;
     if (message == "ON" || message == "1") {
       fanStatus = true;
@@ -308,12 +320,12 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
     }
     
     if (fanStatus != oldStatus && mqtt.connected()) {
-      mqtt.publish("kitchen/fan/status", fanStatus ? "ON" : "OFF");
+      mqtt.publish("kitchen/status/fan", fanStatus ? "ON" : "OFF");
     }
   }
   
   // Control buzzer
-  else if (topicStr == "kitchen/buzzer/control") {
+  else if (topicStr == "kitchen/command/buzzer") {
     if (message == "ON" || message == "1") {
       buzzerStatus = true;
       tone(BUZZER_PIN, 1000);
@@ -324,7 +336,7 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
   }
   
   // Control auto mode
-  else if (topicStr == "kitchen/auto/control") {
+  else if (topicStr == "kitchen/command/auto") {
     if (message == "ON" || message == "1") {
       autoMode = true;
     } else if (message == "OFF" || message == "0") {
@@ -333,7 +345,7 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
       autoMode = !autoMode;
     }
     
-    mqtt.publish("kitchen/auto", autoMode ? "ON" : "OFF");
+    mqtt.publish("kitchen/status/auto", autoMode ? "ON" : "OFF");
     Serial.print("Auto mode: ");
     Serial.println(autoMode ? "ON" : "OFF");
     updateLCD();
@@ -356,8 +368,6 @@ void connectWiFi() {
     Serial.println("\nWiFi Connected!");
     Serial.print("IP: ");
     Serial.println(WiFi.localIP());
-
-    espClient.setInsecure(); 
   } else {
     Serial.println("\nWiFi Connection Failed!");
   }
@@ -368,13 +378,13 @@ void connectMQTT() {
     Serial.print("Connecting to MQTT...");
     String clientId = "ESP32_Kitchen_" + String(random(0xffff), HEX);
     
-    if (mqtt.connect(clientId.c_str(), mqtt_username, mqtt_password)) {
+    if (mqtt.connect(clientId.c_str())) {
       Serial.println("Connected!");
-      mqtt.subscribe("kitchen/led/white/control");
-      mqtt.subscribe("kitchen/led/red/control");
-      mqtt.subscribe("kitchen/fan/control");
-      mqtt.subscribe("kitchen/buzzer/control");
-      mqtt.subscribe("kitchen/auto/control");
+      mqtt.subscribe("kitchen/command/led");
+      mqtt.subscribe("kitchen/command/alarm");
+      mqtt.subscribe("kitchen/command/fan");
+      mqtt.subscribe("kitchen/command/buzzer");
+      mqtt.subscribe("kitchen/command/auto");
       
       publishAllStatus();
     } else {
@@ -445,19 +455,19 @@ void setup() {
   Serial.println("- LCD: Shows temp, humidity, gas level");
   Serial.println("\nMQTT Topics:");
   Serial.println("  Subscribe:");
-  Serial.println("    * kitchen/led/white/control (ON/OFF/TOGGLE)");
-  Serial.println("    * kitchen/led/red/control (ON/OFF/TOGGLE)");
-  Serial.println("    * kitchen/fan/control (ON/OFF/TOGGLE)");
-  Serial.println("    * kitchen/buzzer/control (ON/OFF)");
-  Serial.println("    * kitchen/auto/control (ON/OFF/TOGGLE)");
+  Serial.println("    * kitchen/command/led (ON/OFF/TOGGLE)");
+  Serial.println("    * kitchen/command/alarm (ON/OFF/TOGGLE)");
+  Serial.println("    * kitchen/command/fan (ON/OFF/TOGGLE)");
+  Serial.println("    * kitchen/command/buzzer (ON/OFF)");
+  Serial.println("    * kitchen/command/auto (ON/OFF/TOGGLE)");
   Serial.println("  Publish:");
-  Serial.println("    * kitchen/temperature (float)");
-  Serial.println("    * kitchen/humidity (int)");
-  Serial.println("    * kitchen/gas/detected (YES/NO)");
-  Serial.println("    * kitchen/led/white/status (ON/OFF)");
-  Serial.println("    * kitchen/led/red/status (ON/OFF)");
-  Serial.println("    * kitchen/fan/status (ON/OFF)");
-  Serial.println("    * kitchen/auto (ON/OFF)");
+  Serial.println("    * kitchen/sensor/temperature (float)");
+  Serial.println("    * kitchen/sensor/humidity (int)");
+  Serial.println("    * kitchen/sensor/gas (YES/NO)");
+  Serial.println("    * kitchen/status/led (ON/OFF)");
+  Serial.println("    * kitchen/status/alarm (ON/OFF)");
+  Serial.println("    * kitchen/status/fan (ON/OFF)");
+  Serial.println("    * kitchen/status/auto (ON/OFF)");
   Serial.println();
 }
 

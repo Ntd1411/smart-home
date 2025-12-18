@@ -4,22 +4,27 @@
 #include <DHT.h>
 #include <TM1637Display.h>
 #include <time.h>
-#include <WiFiClientSecure.h>
 
 // WiFi & MQTT Configuration
 const char* ssid = "Wokwi-GUEST";
 const char* password = "";
-const char* mqtt_server = "b622b791584b41fdbffce97186daad8c.s1.eu.hivemq.cloud";  // Public MQTT broker
-const int mqtt_port = 8883;
-const char* mqtt_username = "admin1";
-const char* mqtt_password = "Admin@123";
+const char* mqtt_server = "test.mosquitto.org";  // Public MQTT broker
+const int mqtt_port = 1883;
 
 // NTP Configuration
 const char* ntpServer = "pool.ntp.org";
 const long gmtOffset_sec = 7 * 3600;  // GMT+7 (Vietnam)
 const int daylightOffset_sec = 0;     // No daylight saving
 
-WiFiClientSecure espClient;
+// 📥 Subscribe (Nhận lệnh):
+// bedroom/command/light - Điều khiển LED (ON/OFF/TOGGLE)
+// 📤 Publish (Gửi dữ liệu):
+// bedroom/sensor/temperature - Nhiệt độ (°C, thay đổi ≥0.1°C)
+// bedroom/sensor/humidity - Độ ẩm (%, thay đổi ≥1%)
+// bedroom/sensor/light - Ánh sáng (%, thay đổi ≥1%)
+// bedroom/status/led - Trạng thái LED (ON/OFF)
+
+WiFiClient espClient;
 PubSubClient mqtt(espClient);
 
 // Hardware pins (theo diagram.json bedroom)
@@ -80,22 +85,29 @@ void readDHT() {
   if (!isnan(temp) && !isnan(hum)) {
     temperature = temp;
     humidity = hum;
-    Serial.print("DHT22 - Temp: ");
-    Serial.print(temperature);
-    Serial.print("°C, Humidity: ");
-    Serial.print(humidity);
-    Serial.println("%");
+
+
     
     // Publish if temperature changed by 0.1°C or more
     if (mqtt.connected() && abs(temperature - lastPublishedTemp) >= 0.1) {
-      mqtt.publish("bedroom/temperature", String(temperature, 1).c_str());
+      Serial.print("DHT22 - Temp: ");
+      Serial.print(temperature);
+      Serial.print("°C, Humidity: ");
+      Serial.print(humidity);
+      Serial.println("%");
+      mqtt.publish("bedroom/sensor/temperature", String(temperature, 1).c_str());
       lastPublishedTemp = temperature;
       Serial.println("  -> Published temperature");
     }
     
     // Publish if humidity changed by 1% or more
     if (mqtt.connected() && abs(humidity - lastPublishedHum) >= 1) {
-      mqtt.publish("bedroom/humidity", String((int)humidity).c_str());
+      Serial.print("DHT22 - Temp: ");
+      Serial.print(temperature);
+      Serial.print("°C, Humidity: ");
+      Serial.print(humidity);
+      Serial.println("%");
+      mqtt.publish("bedroom/sensor/humidity", String((int)humidity).c_str());
       lastPublishedHum = humidity;
       Serial.println("  -> Published humidity");
     }
@@ -110,7 +122,7 @@ void readLightSensor() {
   
   // Publish if light changed by 1% or more
   if (mqtt.connected() && abs(lightPercent - lastPublishedLight) >= 1) {
-    mqtt.publish("bedroom/light", String(lightPercent).c_str());
+    mqtt.publish("bedroom/sensor/light", String(lightPercent).c_str());
     lastPublishedLight = lightPercent;
     Serial.print("Light: ");
     Serial.print(lightPercent);
@@ -183,7 +195,7 @@ void handleButton() {
         
         // Publish LED status change
         if (mqtt.connected()) {
-          mqtt.publish("bedroom/led/status", ledStatus ? "ON" : "OFF");
+          mqtt.publish("bedroom/status/led", ledStatus ? "ON" : "OFF");
           lastPublishedLedStatus = ledStatus;
           Serial.println("  -> Published LED status");
         }
@@ -199,10 +211,10 @@ void handleButton() {
 void publishAllStatus() {
   // Publish all current values (called once on startup or reconnect)
   if (mqtt.connected()) {
-    mqtt.publish("bedroom/temperature", String(temperature, 1).c_str());
-    mqtt.publish("bedroom/humidity", String((int)humidity).c_str());
-    mqtt.publish("bedroom/led/status", ledStatus ? "ON" : "OFF");
-    mqtt.publish("bedroom/light", String(lightPercent).c_str());
+    mqtt.publish("bedroom/sensor/temperature", String(temperature, 1).c_str());
+    mqtt.publish("bedroom/sensor/humidity", String((int)humidity).c_str());
+    mqtt.publish("bedroom/status/led", ledStatus ? "ON" : "OFF");
+    mqtt.publish("bedroom/sensor/light", String(lightPercent).c_str());
     
     lastPublishedTemp = temperature;
     lastPublishedHum = humidity;
@@ -225,7 +237,7 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
   Serial.println(message);
   
   // Control commands from MQTT
-  if (String(topic) == "bedroom/led/control") {
+  if (String(topic) == "bedroom/command/light") {
     bool oldStatus = ledStatus;
     
     if (message == "ON" || message == "1") {
@@ -241,7 +253,7 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
     
     // Publish status back if changed
     if (ledStatus != oldStatus) {
-      mqtt.publish("bedroom/led/status", ledStatus ? "ON" : "OFF");
+      mqtt.publish("bedroom/status/led", ledStatus ? "ON" : "OFF");
       lastPublishedLedStatus = ledStatus;
       Serial.print("LED changed to: ");
       Serial.println(ledStatus ? "ON" : "OFF");
@@ -267,8 +279,6 @@ void connectWiFi() {
     Serial.println("\nWiFi Connected!");
     Serial.print("IP: ");
     Serial.println(WiFi.localIP());
-
-    espClient.setInsecure(); 
   } else {
     Serial.println("\nWiFi Connection Failed!");
   }
@@ -279,9 +289,9 @@ void connectMQTT() {
     Serial.print("Connecting to MQTT...");
     String clientId = "ESP32_Bedroom_" + String(random(0xffff), HEX);
     
-    if (mqtt.connect(clientId.c_str(), mqtt_username, mqtt_password)) {
+    if (mqtt.connect(clientId.c_str())) {
       Serial.println("Connected!");
-      mqtt.subscribe("bedroom/led/control");
+      mqtt.subscribe("bedroom/command/light");
       
       // Publish all current status on connect
       publishAllStatus();
@@ -369,12 +379,12 @@ void setup() {
   Serial.println("- LCD: Shows temp, humidity, LED status, light level");
   Serial.println("\nMQTT Topics:");
   Serial.println("  Subscribe:");
-  Serial.println("    * bedroom/led/control (ON/OFF/TOGGLE)");
+  Serial.println("    * bedroom/command/light (ON/OFF/TOGGLE)");
   Serial.println("  Publish:");
-  Serial.println("    * bedroom/temperature (float)");
-  Serial.println("    * bedroom/humidity (int)");
-  Serial.println("    * bedroom/led/status (ON/OFF)");
-  Serial.println("    * bedroom/light (0-100%)");
+  Serial.println("    * bedroom/sensor/temperature");
+  Serial.println("    * bedroom/sensor/humidity");
+  Serial.println("    * bedroom/sensor/light");
+  Serial.println("    * bedroom/status/led (ON/OFF)");
   Serial.println();
 }
 
