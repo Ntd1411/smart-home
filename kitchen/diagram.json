@@ -19,7 +19,7 @@
       "id": "led2",
       "top": -51.6,
       "left": -226.6,
-      "attrs": { "color": "white", "flip": "" }
+      "attrs": { "color": "white", "flip": "", "ppm": "200" }
     },
     { "type": "wokwi-servo", "id": "servo1", "top": 218.8, "left": 230.4, "attrs": {} },
     {
@@ -47,7 +47,7 @@
   "connections": [
     [ "esp:TX", "$serialMonitor:RX", "", [] ],
     [ "esp:RX", "$serialMonitor:TX", "", [] ],
-    [ "gas1:VCC", "esp:3V3", "red", [ "h86.4", "v-250.5" ] ],
+    [ "gas1:VCC", "esp:5V", "red", [ "h86.4", "v-250.5" ] ],
     [ "gas1:GND", "esp:GND.1", "black", [ "h105.6", "v-125.6" ] ],
     [ "dht1:VCC", "esp:3V3", "red", [ "v0" ] ],
     [ "dht1:SDA", "esp:27", "blue", [ "v0" ] ],

@@ -16,21 +16,27 @@ const char* ntpServer = "pool.ntp.org";
 const long gmtOffset_sec = 7 * 3600;  // GMT+7 (Vietnam)
 const int daylightOffset_sec = 0;     // No daylight saving
 
-// 📥 Subscribe (Nhận lệnh):
-// bedroom/command/light - Điều khiển LED (ON/OFF/TOGGLE)
-// 📤 Publish (Gửi dữ liệu):
-// bedroom/sensor/temperature - Nhiệt độ (°C, thay đổi ≥0.1°C)
-// bedroom/sensor/humidity - Độ ẩm (%, thay đổi ≥1%)
-// bedroom/sensor/light - Ánh sáng (%, thay đổi ≥1%)
-// bedroom/status/led - Trạng thái LED (ON/OFF)
-
 WiFiClient espClient;
 PubSubClient mqtt(espClient);
+
+// ========== MQTT Topics ==========
+// sensor data topic (pub)
+String topicSensor = "bedroom/sensor-device";
+String topicStatus = "bedroom/status";
+// command topics (sub)
+String topicCommandLight = "bedroom/command/light";
+String topicGetSensorData = "bedroom/command/get-sensor-data";
+// register device topic (pub)
+String topicDeviceRegister = "bedroom/device-register";
+// status topic (pub)
+String topicLightStatus = "bedroom/device-status/light";
+
+String tempHumidSensorId = "BR_DHT22_01";
 
 // Hardware pins (theo diagram.json bedroom)
 const int DHT_PIN = 19;          // DHT22 data pin
 const int LED_PIN = 26;          // LED
-const int LDR_PIN = 34;          // Photoresistor (Analog) - ADC1 to avoid WiFi conflict
+const int PIR_PIN = 25;          // PIR motion sensor
 const int BUTTON_PIN = 13;       // Button
 const int TM1637_CLK = 14;       // 7-segment CLK
 const int TM1637_DIO = 27;       // 7-segment DIO
@@ -45,21 +51,23 @@ TM1637Display display(TM1637_CLK, TM1637_DIO);
 // Variables
 float temperature = 0.0;
 float humidity = 0.0;
-int lightLevel = 0;              // 0-4095 (ADC 12-bit)
-int lightPercent = 0;            // 0-100%
 bool ledStatus = false;
+bool pirMotionDetected = false;
+
+// PIR auto-off timer
+unsigned long ledAutoOffTime = 0;
+const unsigned long LED_AUTO_OFF_DELAY = 3000;  
 
 // Previous values for change detection
 float lastPublishedTemp = -999.0;
 float lastPublishedHum = -999.0;
-int lastPublishedLight = -1;
 bool lastPublishedLedStatus = false;
 
 // Button handling
 bool lastButtonState = HIGH;
 bool buttonState = HIGH;
 unsigned long lastDebounceTime = 0;
-unsigned long debounceDelay = 20;  // Giảm từ 50ms xuống 20ms để nhạy hơn
+unsigned long debounceDelay = 5;  // Giảm từ 50ms xuống 20ms để nhạy hơn
 
 // Time tracking
 struct tm timeinfo;
@@ -83,50 +91,54 @@ void readDHT() {
   float hum = dht.readHumidity();
   
   if (!isnan(temp) && !isnan(hum)) {
+    bool tempChanged = (abs(temp - lastPublishedTemp) >= 0.1);
+    bool humChanged = (abs(hum - lastPublishedHum) >= 1.0);
+    
     temperature = temp;
     humidity = hum;
 
-
-    
-    // Publish if temperature changed by 0.1°C or more
-    if (mqtt.connected() && abs(temperature - lastPublishedTemp) >= 0.1) {
+    // Publish unified sensor data if any value changed
+    if ((tempChanged || humChanged) && mqtt.connected()) {
       Serial.print("DHT22 - Temp: ");
       Serial.print(temperature);
       Serial.print("°C, Humidity: ");
       Serial.print(humidity);
       Serial.println("%");
-      mqtt.publish("bedroom/sensor/temperature", String(temperature, 1).c_str());
+      
+      String payload = "{";
+      payload += "\"temperature\":" + String(temperature, 1) + ",";
+      payload += "\"humidity\":" + String((int)humidity);
+      payload += "}";
+      
+      mqtt.publish(topicSensor.c_str(), payload.c_str(), false);
       lastPublishedTemp = temperature;
-      Serial.println("  -> Published temperature");
-    }
-    
-    // Publish if humidity changed by 1% or more
-    if (mqtt.connected() && abs(humidity - lastPublishedHum) >= 1) {
-      Serial.print("DHT22 - Temp: ");
-      Serial.print(temperature);
-      Serial.print("°C, Humidity: ");
-      Serial.print(humidity);
-      Serial.println("%");
-      mqtt.publish("bedroom/sensor/humidity", String((int)humidity).c_str());
       lastPublishedHum = humidity;
-      Serial.println("  -> Published humidity");
+      
+      Serial.print("Published temp-humid: ");
+      Serial.println(payload);
     }
   } else {
     Serial.println("Failed to read DHT sensor!");
   }
 }
 
-void readLightSensor() {
-  lightLevel = analogRead(LDR_PIN);
-  lightPercent = map(lightLevel, 0, 4095, 0, 100);
+void handlePIR() {
+  pirMotionDetected = digitalRead(PIR_PIN);
   
-  // Publish if light changed by 1% or more
-  if (mqtt.connected() && abs(lightPercent - lastPublishedLight) >= 1) {
-    mqtt.publish("bedroom/sensor/light", String(lightPercent).c_str());
-    lastPublishedLight = lightPercent;
-    Serial.print("Light: ");
-    Serial.print(lightPercent);
-    Serial.println("% -> Published");
+  if (pirMotionDetected) {
+    // Motion detected - Turn on LED
+    if (!ledStatus) {
+      ledStatus = true;
+      digitalWrite(LED_PIN, HIGH);
+      Serial.println("PIR: Motion detected - LED ON");
+      
+      if (mqtt.connected()) {
+        mqtt.publish(topicLightStatus.c_str(), "ON", true);
+        lastPublishedLedStatus = ledStatus;
+      }
+    }
+    // Reset auto-off timer
+    ledAutoOffTime = millis() + LED_AUTO_OFF_DELAY;
   }
 }
 
@@ -141,13 +153,12 @@ void updateLCD() {
   lcd.print((int)humidity);
   lcd.print("%");
   
-  // Line 2: LED status & Light level
+  // Line 2: LED status & PIR motion
   lcd.setCursor(0, 1);
   lcd.print("LED:");
   lcd.print(ledStatus ? "ON " : "OFF");
-  lcd.print(" L:");
-  lcd.print(lightPercent);
-  lcd.print("%");
+  lcd.print(" PIR:");
+  lcd.print(pirMotionDetected ? "Y" : "N");
 }
 
 void display7SegmentTime() {
@@ -190,14 +201,15 @@ void handleButton() {
         // Toggle LED
         ledStatus = !ledStatus;
         digitalWrite(LED_PIN, ledStatus);
+        ledAutoOffTime = 0;  // Disable auto-off when manually toggled
         Serial.print("Button: LED ");
         Serial.println(ledStatus ? "ON" : "OFF");
         
         // Publish LED status change
         if (mqtt.connected()) {
-          mqtt.publish("bedroom/status/led", ledStatus ? "ON" : "OFF");
+          mqtt.publish(topicLightStatus.c_str(), ledStatus ? "ON" : "OFF", true);
           lastPublishedLedStatus = ledStatus;
-          Serial.println("  -> Published LED status");
+          Serial.println("Published LED status");
         }
         
         updateLCD();  // Update LCD immediately
@@ -211,14 +223,18 @@ void handleButton() {
 void publishAllStatus() {
   // Publish all current values (called once on startup or reconnect)
   if (mqtt.connected()) {
-    mqtt.publish("bedroom/sensor/temperature", String(temperature, 1).c_str());
-    mqtt.publish("bedroom/sensor/humidity", String((int)humidity).c_str());
-    mqtt.publish("bedroom/status/led", ledStatus ? "ON" : "OFF");
-    mqtt.publish("bedroom/sensor/light", String(lightPercent).c_str());
+    // Publish unified sensor data
+    String sensorPayload = "{";
+    sensorPayload += "\"temperature\":" + String(temperature, 1) + ",";
+    sensorPayload += "\"humidity\":" + String((int)humidity);
+    sensorPayload += "}";
+    mqtt.publish(topicSensor.c_str(), sensorPayload.c_str(), false);
+    
+    // Publish device status
+    mqtt.publish(topicLightStatus.c_str(), ledStatus ? "ON" : "OFF", true);
     
     lastPublishedTemp = temperature;
     lastPublishedHum = humidity;
-    lastPublishedLight = lightPercent;
     lastPublishedLedStatus = ledStatus;
     
     Serial.println("Initial status published to MQTT");
@@ -236,24 +252,36 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
   Serial.print("]: ");
   Serial.println(message);
   
+  String topicStr = String(topic);
+  
+  // Get sensor data command
+  if (topicStr == topicGetSensorData) {
+    Serial.println("MQTT command: Get sensor data");
+    readDHT();
+    return;
+  }
+  
   // Control commands from MQTT
-  if (String(topic) == "bedroom/command/light") {
+  if (topicStr == topicCommandLight) {
     bool oldStatus = ledStatus;
     
     if (message == "ON" || message == "1") {
       ledStatus = true;
       digitalWrite(LED_PIN, HIGH);
+      ledAutoOffTime = 0;  // Disable auto-off when manually controlled
     } else if (message == "OFF" || message == "0") {
       ledStatus = false;
       digitalWrite(LED_PIN, LOW);
+      ledAutoOffTime = 0;  // Disable auto-off
     } else if (message == "TOGGLE") {
       ledStatus = !ledStatus;
       digitalWrite(LED_PIN, ledStatus);
+      ledAutoOffTime = 0;  // Disable auto-off
     }
     
     // Publish status back if changed
     if (ledStatus != oldStatus) {
-      mqtt.publish("bedroom/status/led", ledStatus ? "ON" : "OFF");
+      mqtt.publish(topicLightStatus.c_str(), ledStatus ? "ON" : "OFF", true);
       lastPublishedLedStatus = ledStatus;
       Serial.print("LED changed to: ");
       Serial.println(ledStatus ? "ON" : "OFF");
@@ -291,7 +319,21 @@ void connectMQTT() {
     
     if (mqtt.connect(clientId.c_str())) {
       Serial.println("Connected!");
-      mqtt.subscribe("bedroom/command/light");
+      
+      // Subscribe to control topics
+      mqtt.subscribe(topicCommandLight.c_str());
+      mqtt.subscribe(topicGetSensorData.c_str());
+      
+      // Publish online status
+      mqtt.publish(topicStatus.c_str(), "online", true);
+      
+      // Register temp/humidity sensor device
+      String payload1 = "{";
+      payload1 += "\"id\":\"" + tempHumidSensorId + "\",";
+      payload1 += "\"name\":\"temperature and humidity sensor\",";
+      payload1 += "\"type\":\"temp_humid_sensor\"";
+      payload1 += "}";
+      mqtt.publish(topicDeviceRegister.c_str(), payload1.c_str(), false);
       
       // Publish all current status on connect
       publishAllStatus();
@@ -312,8 +354,8 @@ void setup() {
   
   // Initialize pins
   pinMode(LED_PIN, OUTPUT);
+  pinMode(PIR_PIN, INPUT);         // PIR motion sensor
   pinMode(BUTTON_PIN, INPUT_PULLUP);  // Button with internal pullup
-  pinMode(LDR_PIN, INPUT);
   digitalWrite(LED_PIN, LOW);
   
   // Initialize LCD
@@ -366,7 +408,6 @@ void setup() {
   // Initial sensor readings
   delay(2000);  // DHT needs time to stabilize
   readDHT();
-  readLightSensor();
   
   // Update displays
   updateLCD();
@@ -411,8 +452,21 @@ void loop() {
     readDHT();
   }
   
-  // Read light sensor continuously (faster response)
-  readLightSensor();
+  // Handle PIR motion sensor
+  handlePIR();
+  
+  // Auto-off LED after PIR timer expires
+  if (ledAutoOffTime > 0 && currentMillis >= ledAutoOffTime) {
+    ledStatus = false;
+    digitalWrite(LED_PIN, LOW);
+    ledAutoOffTime = 0;
+    Serial.println("PIR: LED auto-off");
+    
+    if (mqtt.connected()) {
+      mqtt.publish(topicLightStatus.c_str(), "OFF", true);
+      lastPublishedLedStatus = ledStatus;
+    }
+  }
   
   // Update LCD display
   if (currentMillis - lastLCDUpdate >= LCD_INTERVAL) {

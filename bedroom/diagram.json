@@ -20,7 +20,6 @@
       "rotate": 90,
       "attrs": {}
     },
-    { "type": "wokwi-photoresistor-sensor", "id": "ldr1", "top": 272, "left": -220, "attrs": {} },
     {
       "type": "wokwi-tm1637-7segment",
       "id": "sevseg1",
@@ -41,6 +40,14 @@
       "top": 44.6,
       "left": -153.6,
       "attrs": { "color": "green", "xray": "1" }
+    },
+    {
+      "type": "wokwi-pir-motion-sensor",
+      "id": "pir1",
+      "top": 251.88,
+      "left": -149.1,
+      "rotate": 270,
+      "attrs": { "delayTime": "1" }
     }
   ],
   "connections": [
@@ -54,16 +61,16 @@
     [ "dht1:GND", "esp:GND.3", "black", [ "h-81.9", "v-112.5" ] ],
     [ "dht1:SDA", "esp:19", "cyan", [ "h-72.3", "v-64.4" ] ],
     [ "led1:A", "esp:26", "#8f4814", [ "v0" ] ],
-    [ "ldr1:VCC", "esp:3V3", "red", [ "h0", "v-259.2" ] ],
-    [ "ldr1:GND", "esp:GND.1", "black", [ "h9.6", "v-144.4" ] ],
-    [ "ldr1:AO", "esp:34", "cyan", [ "h19.2", "v-173.5" ] ],
     [ "sevseg1:VCC", "esp:3V3", "red", [ "h0" ] ],
     [ "sevseg1:GND", "esp:GND.1", "black", [ "h28.8", "v182.4" ] ],
     [ "sevseg1:DIO", "esp:27", "gray", [ "h38.4", "v172.8" ] ],
     [ "sevseg1:CLK", "esp:14", "magenta", [ "h48", "v192" ] ],
     [ "led1:C", "esp:GND.1", "black", [ "v0" ] ],
     [ "btn1:2.r", "esp:GND.1", "black", [ "h0.2", "v77" ] ],
-    [ "btn1:1.r", "esp:13", "blue", [ "v0", "h9.8", "v105.6" ] ]
+    [ "btn1:1.r", "esp:13", "blue", [ "v0", "h9.8", "v105.6" ] ],
+    [ "pir1:GND", "esp:GND.1", "black", [ "h0", "v-134.14" ] ],
+    [ "pir1:OUT", "esp:25", "green", [ "h9.6", "v-191.86" ] ],
+    [ "pir1:VCC", "esp:5V", "red", [ "h28.8", "v-96" ] ]
   ],
   "dependencies": {}
 }
