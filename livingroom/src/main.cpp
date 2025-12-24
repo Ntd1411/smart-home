@@ -101,10 +101,6 @@ bool changingPassword = false;
 int passwordChangeStep = 0; // 0=old, 1=new, 2=confirm
 String newPassword = "";
 
-// Door auto-lock
-unsigned long doorAutoLockTime = 0;
-const unsigned long DOOR_AUTO_LOCK_DELAY = 3000; // 3 seconds
-
 // LCD message
 unsigned long lcdMessageTimeout = 0;
 
@@ -267,12 +263,36 @@ void handleKeypad()
 
   if (key == 'A')
   {
-    // Start entering password to unlock/lock door
+    // Start entering password to unlock door
     enteringPassword = true;
     keypadBuffer = "";
     keypadTimeout = millis() + KEYPAD_TIMEOUT;
     showLCDMessage("Enter Password:", "", 500);
     Serial.println("Enter password mode");
+    return;
+  }
+
+  if (key == 'B')
+  {
+    // Lock door immediately without password
+    if (!doorLocked)
+    {
+      doorLocked = true;
+      doorServo.write(0);
+      showLCDMessage("Door:", "LOCKED");
+
+      if (mqtt.connected())
+      {
+        mqtt.publish(topicDoorStatus.c_str(), "LOCKED", true);
+        lastPublishedDoor = doorLocked;
+      }
+
+      Serial.println("Door: LOCKED by key B");
+    }
+    else
+    {
+      showLCDMessage("Door already", "LOCKED", 1000);
+    }
     return;
   }
 
@@ -396,7 +416,6 @@ void handleKeypad()
         // Unlock door
         doorLocked = false;
         doorServo.write(90);
-        doorAutoLockTime = millis() + DOOR_AUTO_LOCK_DELAY;
 
         showLCDMessage("Door UNLOCKED", "", 500);
 
@@ -721,24 +740,6 @@ void loop()
     keypadBuffer = "";
     newPassword = "";
     Serial.println("Password change timeout");
-  }
-
-  // Auto-lock door after 3 seconds
-  if (!doorLocked && doorAutoLockTime > 0 && currentMillis >= doorAutoLockTime)
-  {
-    doorLocked = true;
-    doorServo.write(0);
-    doorAutoLockTime = 0;
-
-    showLCDMessage("Door:", "AUTO-LOCKED");
-
-    if (mqtt.connected())
-    {
-      mqtt.publish(topicDoorStatus.c_str(), "LOCKED", true);
-      lastPublishedDoor = doorLocked;
-    }
-
-    Serial.println("Door: AUTO-LOCKED");
   }
 
   unsigned long lastOnline = currentMillis;
