@@ -23,14 +23,15 @@ String topicStatus = "living-room/status";
 // command topics (sub)
 String topicCommandLight = "living-room/command/light";
 String topicCommandDoor = "living-room/command/door";
-String topicCommandPassword = "living-room/command/password";
 String topicGetSensorData = "living-room/command/get-sensor-data";
+String topicRequestPassword = "living-room/request/password"; // Yêu cầu lấy mật khẩu
+String topicResponsePassword = "living-room/response/password"; // Chỉ nhận mật khẩu từ server
 // register device topic (pub)
 String topicDeviceRegister = "living-room/device-register";
 // status topic (pub)
 String topicLightStatus = "living-room/device-status/light";
 String topicDoorStatus = "living-room/device-status/door";
-String topicPasswordStatus = "living-room/device-status/password";
+String topicPasswordStatus = "living-room/device-status/password";  // Gửi mật khẩu lên server để lưu
 
 
 String tempHumidSensorId = "LR_DHT22_01";
@@ -106,6 +107,10 @@ const unsigned long DOOR_AUTO_LOCK_DELAY = 3000; // 3 seconds
 
 // LCD message
 unsigned long lcdMessageTimeout = 0;
+
+// Password request
+bool passwordRequested = false;
+bool passwordReceived = false;
 
 // ========== Helper Functions ==========
 
@@ -331,10 +336,11 @@ void handleKeypad()
         {
           doorPassword = newPassword;
 
-          // Publish new password to MQTT server
+          // Lưu mật khẩu mới lên server
           if (mqtt.connected())
           {
             mqtt.publish(topicPasswordStatus.c_str(), doorPassword.c_str());
+            Serial.println("Password saved to server");
           }
 
           showLCDMessage("Password", "Changed!", 1500);
@@ -498,14 +504,20 @@ void mqttCallback(char *topic, byte *payload, unsigned int length)
     showLCDMessage("Door:", doorLocked ? "LOCKED" : "UNLOCKED");
   }
 
-  // Change password
-  else if (topicStr == topicCommandPassword)
+  // Receive and update password from server
+  else if (topicStr == topicResponsePassword)
   {
     if (message.length() >= 4 && message.length() <= 8)
     {
       doorPassword = message;
-      showLCDMessage("Password", "Changed!");
-      Serial.println("Password updated via MQTT");
+      passwordReceived = true;
+      showLCDMessage("Password", "Loaded!");
+      Serial.print("Password loaded from server: ");
+      Serial.println(doorPassword);
+    }
+    else
+    {
+      Serial.println("Invalid password from server, using default");
     }
   }
 }
@@ -550,8 +562,8 @@ void connectMQTT()
       // Subscribe to control topics
       mqtt.subscribe(topicCommandLight.c_str());
       mqtt.subscribe(topicCommandDoor.c_str());
-      mqtt.subscribe(topicCommandPassword.c_str());
       mqtt.subscribe(topicGetSensorData.c_str());
+      mqtt.subscribe(topicResponsePassword.c_str()); // Subscribe để nhận mật khẩu từ server
 
 
       // Publish online status
@@ -587,6 +599,14 @@ void connectMQTT()
       lastPublishedDoor = doorLocked;
 
       Serial.println("Initial status published");
+      
+      // Yêu cầu lấy mật khẩu từ server
+      if (!passwordRequested)
+      {
+        Serial.println("Requesting password from server...");
+        mqtt.publish(topicRequestPassword.c_str(), "GET_PASSWORD", false);
+        passwordRequested = true;
+      }
     }
     else
     {
