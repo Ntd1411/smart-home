@@ -102,6 +102,7 @@ unsigned long systemStartTime = 0;
 const unsigned long DHT_INTERVAL = 2000;
 const unsigned long LCD_INTERVAL = 1000;
 const unsigned long GAS_INTERVAL = 500; 
+const unsigned long ONLINE_INTERVAL = 1000;
 
 bool gasSensorReady = false;
 
@@ -557,6 +558,11 @@ void loop() {
   
   // Handle button input
   handleButton();
+
+  unsigned long lastOnline = currentMillis;
+  if(currentMillis - lastOnline >= ONLINE_INTERVAL) {
+    mqtt.publish(topicStatus.c_str(), "online", true);
+  }
   
   delay(10);
 }

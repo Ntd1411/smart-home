@@ -67,7 +67,7 @@ bool lastPublishedLedStatus = false;
 bool lastButtonState = HIGH;
 bool buttonState = HIGH;
 unsigned long lastDebounceTime = 0;
-unsigned long debounceDelay = 5;  // Giảm từ 50ms xuống 20ms để nhạy hơn
+unsigned long debounceDelay = 5;  
 
 // Time tracking
 struct tm timeinfo;
@@ -83,6 +83,7 @@ const unsigned long DHT_INTERVAL = 2000;      // Đọc DHT mỗi 2 giây
 const unsigned long LCD_INTERVAL = 1000;      // Cập nhật LCD mỗi 1 giây
 const unsigned long MQTT_INTERVAL = 5000;     // Gửi MQTT mỗi 5 giây
 const unsigned long TIME_INTERVAL = 1000;     // Cập nhật thời gian mỗi 1 giây
+const unsigned long ONLINE_INTERVAL = 1000;   // Cập nhật trạng thái online mỗi 1 giây
 
 // ========== HELPER FUNCTIONS ==========
 
@@ -482,6 +483,11 @@ void loop() {
   
   // Handle button input
   handleButton();
+
+  unsigned long lastOnline = currentMillis;
+  if(currentMillis - lastOnline >= ONLINE_INTERVAL) {
+    mqtt.publish(topicStatus.c_str(), "online", true);
+  }
   
   delay(10);  // Small delay for stability
 }

@@ -82,6 +82,7 @@ unsigned long lastDHTRead = 0;
 unsigned long lastLCDUpdate = 0;
 const unsigned long DHT_INTERVAL = 2000;
 const unsigned long LCD_INTERVAL = 1000;
+const unsigned long ONLINE_INTERVAL = 1000;
 
 // Button handling
 bool lastButtonState = HIGH;
@@ -718,6 +719,11 @@ void loop()
     }
 
     Serial.println("Door: AUTO-LOCKED");
+  }
+
+  unsigned long lastOnline = currentMillis;
+  if(currentMillis - lastOnline >= ONLINE_INTERVAL) {
+    mqtt.publish(topicStatus.c_str(), "online", true);
   }
 
   delay(10);
