@@ -7,48 +7,82 @@
 #include <Keypad.h>
 #include <Preferences.h>
 
-// ========== WiFi & MQTT Configuration ==========
+// ================= WiFi & MQTT =================
 const char *ssid = "Wokwi-GUEST";
 const char *password = "";
-const char *mqtt_server = "test.mosquitto.org";
-const int mqtt_port = 1883;
+const char *mqtt_server = "switchback.proxy.rlwy.net";
+const int mqtt_port = 35495;
 
 WiFiClient espClient;
 PubSubClient mqtt(espClient);
 
+// ================= Device IDs =================
+String tempHumidSensorId = "LV_DHT22_01";
+
+// ================= Structs & Devices =================
+struct LightDevice
+{
+  String id;
+  int pin;
+  bool status;
+  bool lastPublishLed;
+};
+
+struct DoorDevice
+{
+  String id;
+  int pin;
+  bool locked;
+  bool lastPublishDoor;
+  String password;
+  Servo servo;
+};
+
+LightDevice lights[] = {
+    {"LV_Light_01", 26, false, false},
+    {"LV_Light_02", 27, false, false},
+    {"LV_Light_03", 14, false, false}
+};
+
+DoorDevice doors[] = {
+    {"LV_Door_01", 25, true, false, "1234", Servo()},
+};
+
 // ========== MQTT Topics ==========
 // sensor data topic (pub)
 String topicSensor = "living-room/sensor-device";
-String topicStatus = "living-room/status";
+String topicStatus = "living-room/current-status";
+
 // command topics (sub)
-String topicCommandLight = "living-room/command/light";
-String topicCommandDoor = "living-room/command/door";
+String topicCommandLightPrefix = "living-room/command/light/";
+
+String topicCommandDoorPrefix = "living-room/command/door/";
+
 String topicGetSensorData = "living-room/command/get-sensor-data";
-String topicRequestPassword = "living-room/request/password"; // Yêu cầu lấy mật khẩu
-String topicResponsePassword = "living-room/response/password"; // Chỉ nhận mật khẩu từ server
+String topicRequestPasswordDoorPrefix = "living-room/request/password/";   // Yêu cầu lấy mật khẩu
+String topicResponsePasswordDoorPrefix = "living-room/response/password/"; // Chỉ nhận mật khẩu từ server
+
 // register device topic (pub)
 String topicDeviceRegister = "living-room/device-register";
 // status topic (pub)
-String topicLightStatus = "living-room/device-status/light";
-String topicDoorStatus = "living-room/device-status/door";
-String topicPasswordStatus = "living-room/device-status/password";  // Gửi mật khẩu lên server để lưu
+String topicLightStatusPrefix = "living-room/device-status/light/";
+String topicDoorStatusPrefix = "living-room/device-status/door/";
 
-
-String tempHumidSensorId = "LR_DHT22_01";
+String topicPasswordStatusPrefix = "living-room/device-status/password/"; // Gửi mật khẩu lên server để lưu
+String topicPasswordValidationPrefix = "living-room/password-validation/";  // Pub kết quả kiểm tra mật khẩu (SUCCESS/FAILED)
 
 // ========== Hardware Pins ==========
-const int LED_PIN = 26;    // LED
+// thêm đèn
+
 const int BUTTON_PIN = 13; // Button
 const int DHT_PIN = 19;    // DHT22
-const int SERVO_PIN = 25;  // Servo motor
-const int LCD_SDA = 21;    // LCD I2C SDA
-const int LCD_SCL = 22;    // LCD I2C SCL
+
+const int LCD_SDA = 21; // LCD I2C SDA
+const int LCD_SCL = 22; // LCD I2C SCL
 
 // ========== Objects ==========
 LiquidCrystal_I2C lcd(0x27, 16, 2);
 DHT dht(DHT_PIN, DHT22);
-Servo doorServo;
-Preferences prefs;
 
 // ========== Keypad 4x4 Configuration ==========
 const byte ROWS = 4;
@@ -67,16 +101,9 @@ Keypad keypad = Keypad(makeKeymap(keys), rowPins, colPins, ROWS, COLS);
 float temperature = 0.0;
 float humidity = 0.0;
 
-// Device status
-bool ledStatus = false;
-bool doorLocked = true;
-String doorPassword = "1234";
-
 // Last published values
 float lastPublishedTemp = -999.0;
 float lastPublishedHum = -999.0;
-bool lastPublishedLed = false;
-bool lastPublishedDoor = false;
 
 // Timing
 unsigned long lastDHTRead = 0;
@@ -101,10 +128,15 @@ bool changingPassword = false;
 int passwordChangeStep = 0; // 0=old, 1=new, 2=confirm
 String newPassword = "";
 
+// Door auto-lock
+unsigned long doorAutoLockTime = 0;
+const unsigned long DOOR_AUTO_LOCK_DELAY = 3000; // 3 seconds
+
 // LCD message
 unsigned long lcdMessageTimeout = 0;
 
 // Password request
+// sửa
 bool passwordRequested = false;
 bool passwordReceived = false;
 
@@ -168,7 +200,8 @@ void updateLCD()
   }
 
   lcd.clear();
-  // Line 1: Temperature & Humidity
+  // Line 1: Temperature & Humidity (fits perfectly on 16 chars)
+  // Format: "T:25.5C H:65%"
   lcd.setCursor(0, 0);
   lcd.print("T:");
   lcd.print(temperature, 1);
@@ -176,12 +209,15 @@ void updateLCD()
   lcd.print((int)humidity);
   lcd.print("%");
 
-  // Line 2: LED status & Door status
+  // Line 2: LED status (3 bits) + Door status
+  // Format: "LED:001 Locked" or "LED:101 Unlocked"
   lcd.setCursor(0, 1);
   lcd.print("LED:");
-  lcd.print(ledStatus ? "ON " : "OFF");
-  lcd.print(" Door:");
-  lcd.print(doorLocked ? "L" : "U");
+  lcd.print(lights[0].status ? "1" : "0");
+  lcd.print(lights[1].status ? "1" : "0");
+  lcd.print(lights[2].status ? "1" : "0");
+  lcd.print(" ");
+  lcd.print(doors[0].locked ? "Locked" : "Unlocked");
 }
 
 void readDHT()
@@ -231,19 +267,17 @@ void handleButton()
     if (reading == LOW)
     {
       // Button pressed - Toggle LED
-      ledStatus = !ledStatus;
-      digitalWrite(LED_PIN, ledStatus);
+      lights[0].status = !lights[0].status;
+      digitalWrite(lights[0].pin, lights[0].status);
 
       Serial.print("Button: LED ");
-      Serial.println(ledStatus ? "ON" : "OFF");
-
+      Serial.println(lights[0].status ? "ON" : "OFF");
       if (mqtt.connected())
       {
-        mqtt.publish(topicLightStatus.c_str(), ledStatus ? "ON" : "OFF", true);
-        lastPublishedLed = ledStatus;
+        mqtt.publish((topicLightStatusPrefix + lights[0].id).c_str(), lights[0].status ? "ON" : "OFF", false); // retained
+        lights[0].lastPublishLed = lights[0].status;
         Serial.println("Published led status!");
       }
-
 
       // Update LCD immediately
       lcdMessageTimeout = 0;
@@ -263,7 +297,7 @@ void handleKeypad()
 
   if (key == 'A')
   {
-    // Start entering password to unlock door
+    // Start entering password to unlock/lock door
     enteringPassword = true;
     keypadBuffer = "";
     keypadTimeout = millis() + KEYPAD_TIMEOUT;
@@ -274,25 +308,19 @@ void handleKeypad()
 
   if (key == 'B')
   {
-    // Lock door immediately without password
-    if (!doorLocked)
+    // Lock door immediately
+    doors[0].locked = true;
+    doors[0].servo.write(0);
+    
+    showLCDMessage("Door LOCKED", "", 1000);
+    
+    if (mqtt.connected())
     {
-      doorLocked = true;
-      doorServo.write(0);
-      showLCDMessage("Door:", "LOCKED");
-
-      if (mqtt.connected())
-      {
-        mqtt.publish(topicDoorStatus.c_str(), "LOCKED", true);
-        lastPublishedDoor = doorLocked;
-      }
-
-      Serial.println("Door: LOCKED by key B");
+      mqtt.publish((topicDoorStatusPrefix + doors[0].id).c_str(), "LOCKED", false);
+      doors[0].lastPublishDoor = doors[0].locked;
     }
-    else
-    {
-      showLCDMessage("Door already", "LOCKED", 1000);
-    }
+    
+    Serial.println("Button B: Door LOCKED");
     return;
   }
 
@@ -317,7 +345,7 @@ void handleKeypad()
       if (passwordChangeStep == 0)
       {
         // Verify old password
-        if (keypadBuffer == doorPassword)
+        if (keypadBuffer == doors[0].password)
         {
           passwordChangeStep = 1;
           keypadBuffer = "";
@@ -354,18 +382,18 @@ void handleKeypad()
         // Confirm new password
         if (keypadBuffer == newPassword)
         {
-          doorPassword = newPassword;
+          doors[0].password = newPassword;
 
           // Lưu mật khẩu mới lên server
           if (mqtt.connected())
           {
-            mqtt.publish(topicPasswordStatus.c_str(), doorPassword.c_str());
+            mqtt.publish((topicPasswordStatusPrefix + doors[0].id).c_str(), doors[0].password.c_str());
             Serial.println("Password saved to server");
           }
 
           showLCDMessage("Password", "Changed!", 1500);
           Serial.print("Password changed to: ");
-          Serial.println(doorPassword);
+          Serial.println(doors[0].password);
         }
         else
         {
@@ -411,18 +439,22 @@ void handleKeypad()
     if (key == '#')
     {
       // Check password
-      if (keypadBuffer == doorPassword)
+      if (keypadBuffer == doors[0].password)
       {
         // Unlock door
-        doorLocked = false;
-        doorServo.write(90);
+        doors[0].locked = false;
+        doors[0].servo.write(90);
+        doorAutoLockTime = millis() + DOOR_AUTO_LOCK_DELAY;
 
         showLCDMessage("Door UNLOCKED", "", 500);
 
         if (mqtt.connected())
         {
-          mqtt.publish(topicDoorStatus.c_str(), "UNLOCKED", true);
-          lastPublishedDoor = doorLocked;
+          mqtt.publish((topicDoorStatusPrefix + doors[0].id).c_str(), "UNLOCKED", false); // retained
+          doors[0].lastPublishDoor = doors[0].locked;
+          
+          // Publish password validation success
+          mqtt.publish((topicPasswordValidationPrefix + doors[0].id).c_str(), "SUCCESS", false);
         }
 
         Serial.println("Door: UNLOCKED");
@@ -431,6 +463,12 @@ void handleKeypad()
       {
         showLCDMessage("Wrong Password!", "");
         Serial.println("Wrong password!");
+        
+        // Publish password validation failed
+        if (mqtt.connected())
+        {
+          mqtt.publish((topicPasswordValidationPrefix + doors[0].id).c_str(), "FAILED", false);
+        }
       }
 
       enteringPassword = false;
@@ -455,6 +493,83 @@ void handleKeypad()
   }
 }
 
+// Find light by id
+LightDevice *getLightById(const String &id)
+{
+  for (int i = 0; i < sizeof(lights) / sizeof(lights[0]); i++)
+    if (lights[i].id == id)
+      return &lights[i];
+  return nullptr;
+}
+
+// Tìm cửa theo id
+DoorDevice *getDoorById(const String &id)
+{
+  for (int i = 0; i < sizeof(doors) / sizeof(doors[0]); i++)
+  {
+    if (doors[i].id == id)
+      return &doors[i];
+  }
+  return nullptr;
+}
+
+// Handle light command
+void handleLightCommand(const String &topic, const String &message)
+{
+  int lastSlash = topic.lastIndexOf('/');
+  String id = topic.substring(lastSlash + 1);
+  LightDevice *light = getLightById(id);
+  if (!light)
+    return;
+
+  if (message == "ON" || message == "1")
+    light->status = true;
+  else if (message == "OFF" || message == "0")
+    light->status = false;
+  else if (message == "TOGGLE")
+    light->status = !light->status;
+
+  digitalWrite(light->pin, light->status);
+  if (mqtt.connected())
+  {
+    String statusTopic = String(topicLightStatusPrefix) + light->id;
+    mqtt.publish(statusTopic.c_str(), light->status ? "ON" : "OFF", false);
+  }
+  showLCDMessage(("LED " + light->id).c_str(), light->status ? "ON" : "OFF");
+  Serial.println("LED " + light->id + ": " + (light->status ? "ON" : "OFF"));
+}
+
+void handleDoorCommand(const String &topic, const String &message)
+{
+  int lastSlash = topic.lastIndexOf('/');
+  String id = topic.substring(lastSlash + 1);
+  DoorDevice *door = getDoorById(id);
+  if (!door)
+    return;
+
+  if (message == "LOCK")
+  {
+    door->locked = true;
+    door->servo.write(0);
+  }
+  else if (message == "UNLOCK")
+  {
+    door->locked = false;
+    door->servo.write(90);
+  }
+
+  // Publish trạng thái lên MQTT
+  if (mqtt.connected())
+  {
+    String statusTopic = String(topicDoorStatusPrefix + door->id);
+    mqtt.publish(statusTopic.c_str(), door->locked ? "LOCKED" : "UNLOCKED", false);
+  }
+
+  // Hiển thị trên LCD
+  showLCDMessage(("Door: " + door->id).c_str(), door->locked ? "LOCKED" : "UNLOCKED");
+  Serial.println("Door " + door->id + ": " + (door->locked ? "LOCKED" : "UNLOCKED"));
+}
+
 void mqttCallback(char *topic, byte *payload, unsigned int length)
 {
   String message = "";
@@ -470,7 +585,7 @@ void mqttCallback(char *topic, byte *payload, unsigned int length)
 
   String topicStr = String(topic);
 
-  if(topicStr == topicGetSensorData)
+  if (topicStr == topicGetSensorData)
   {
     // Publish current sensor data immediately
     Serial.println("MQTT command: Get sensor data");
@@ -478,65 +593,41 @@ void mqttCallback(char *topic, byte *payload, unsigned int length)
     return;
   }
 
-  // Control LED
-  if (topicStr == topicCommandLight)
-  {
-    if (message == "ON" || message == "1")
-    {
-      ledStatus = true;
-    }
-    else if (message == "OFF" || message == "0")
-    {
-      ledStatus = false;
-    }
-    else if (message == "TOGGLE")
-    {
-      ledStatus = !ledStatus;
-    }
-    digitalWrite(LED_PIN, ledStatus);
-
-    if (mqtt.connected())
-    {
-      mqtt.publish(topicLightStatus.c_str(), ledStatus ? "ON" : "OFF", true);
-    }
-    showLCDMessage("LED:", ledStatus ? "ON" : "OFF");
-  }
-
+  // Control lights
+  else if (topicStr.startsWith(topicCommandLightPrefix))
+    handleLightCommand(topicStr, message);
   // Control door
-  else if (topicStr == topicCommandDoor)
-  {
-    if (message == "LOCK")
-    {
-      doorLocked = true;
-      doorServo.write(0);
-    }
-    else if (message == "UNLOCK")
-    {
-      doorLocked = false;
-      doorServo.write(90);
-    }
-
-    if (mqtt.connected())
-    {
-      mqtt.publish(topicDoorStatus.c_str(), doorLocked ? "LOCKED" : "UNLOCKED", true);
-    }
-    showLCDMessage("Door:", doorLocked ? "LOCKED" : "UNLOCKED");
-  }
+  else if (topicStr.startsWith(topicCommandDoorPrefix))
+    handleDoorCommand(topicStr, message);
 
   // Receive and update password from server
-  else if (topicStr == topicResponsePassword)
+  else if (topicStr.startsWith(topicResponsePasswordDoorPrefix))
   {
+    // Lấy ID cửa từ topic, ví dụ: "living-room/response/password/LV_Door_01"
+    int lastSlash = topicStr.lastIndexOf('/');
+    String doorId = topicStr.substring(lastSlash + 1);
+
+    DoorDevice *door = getDoorById(doorId);
+    if (!door)
+    {
+      Serial.println("Unknown door ID in password response: " + doorId);
+      return;
+    }
+
+    // Kiểm tra độ dài password hợp lệ
     if (message.length() >= 4 && message.length() <= 8)
     {
-      doorPassword = message;
+      door->password = message; // Lưu password riêng cho cửa này
       passwordReceived = true;
-      showLCDMessage("Password", "Loaded!");
-      Serial.print("Password loaded from server: ");
-      Serial.println(doorPassword);
+      showLCDMessage(("Password " + door->id).c_str(), "Loaded!");
+      Serial.print("Password loaded for door ");
+      Serial.print(door->id);
+      Serial.print(": ");
+      Serial.println(door->password);
     }
     else
     {
-      Serial.println("Invalid password from server, using default");
+      Serial.println("Invalid password from server for door " + door->id);
     }
   }
 }
@@ -574,19 +665,40 @@ void connectMQTT()
     Serial.print("Connecting to MQTT...");
     String clientId = "ESP32_Livingroom_" + String(random(0xffff), HEX);
 
-    if (mqtt.connect(clientId.c_str()))
+    if (mqtt.connect(
+            clientId.c_str(),
+            nullptr,
+            nullptr,
+            topicStatus.c_str(), // LWT topic
+            1,                   // QoS
+            false,               // retained
+            "offline"            // LWT message
+            ))
     {
       Serial.println("Connected!");
 
       // Subscribe to control topics
-      mqtt.subscribe(topicCommandLight.c_str());
-      mqtt.subscribe(topicCommandDoor.c_str());
       mqtt.subscribe(topicGetSensorData.c_str());
-      mqtt.subscribe(topicResponsePassword.c_str()); // Subscribe để nhận mật khẩu từ server
 
+      // Subscribe door commands & password responses per door
+      for (int i = 0; i < sizeof(doors) / sizeof(doors[0]); i++)
+      {
+        String doorCmdTopic = topicCommandDoorPrefix + doors[i].id;          // ví dụ: "living-room/command/door/LV_Door_01"
+        String doorPwdTopic = topicResponsePasswordDoorPrefix + doors[i].id; // ví dụ: "living-room/response/password/LV_Door_01"
+
+        mqtt.subscribe(doorCmdTopic.c_str());
+        mqtt.subscribe(doorPwdTopic.c_str());
+      }
+
+      // Subscribe light command topics
+      for (int i = 0; i < sizeof(lights) / sizeof(lights[0]); i++)
+      {
+        String cmdTopic = topicCommandLightPrefix + lights[i].id;
+        mqtt.subscribe(cmdTopic.c_str());
+      }
 
       // Publish online status
-      mqtt.publish(topicStatus.c_str(), "online", true);
+      mqtt.publish(topicStatus.c_str(), "online", false);
 
       // đăng kí device sensor
       String payload = "{";
@@ -609,21 +721,42 @@ void connectMQTT()
       mqtt.publish(topicSensor.c_str(), sensorPayload.c_str(), false);
 
       // Publish initial device status
-      mqtt.publish(topicLightStatus.c_str(), ledStatus ? "ON" : "OFF", true);
-      mqtt.publish(topicDoorStatus.c_str(), doorLocked ? "LOCKED" : "UNLOCKED", true);
+      for (int i = 0; i < sizeof(lights) / sizeof(lights[0]); i++)
+      {
+        String statusTopic = String(topicLightStatusPrefix) + lights[i].id;
+        Serial.print(statusTopic);
+        mqtt.publish(statusTopic.c_str(), lights[i].status ? "ON" : "OFF", false);
+        lights[i].lastPublishLed = lights[i].status;
+      } // retained
+
+      // Publish door status (giống light)
+      for (int i = 0; i < sizeof(doors) / sizeof(doors[0]); i++)
+      {
+        String doorStatusTopic = String(topicDoorStatusPrefix) + doors[i].id;
+        mqtt.publish(
+            doorStatusTopic.c_str(),
+            doors[i].locked ? "LOCKED" : "UNLOCKED",
+            false);
+        doors[i].lastPublishDoor = doors[i].locked;
+      } // retained
 
       lastPublishedTemp = temperature;
       lastPublishedHum = humidity;
-      lastPublishedLed = ledStatus;
-      lastPublishedDoor = doorLocked;
 
       Serial.println("Initial status published");
-      
+
       // Yêu cầu lấy mật khẩu từ server
       if (!passwordRequested)
       {
-        Serial.println("Requesting password from server...");
-        mqtt.publish(topicRequestPassword.c_str(), "GET_PASSWORD", false);
+        for (int i = 0; i < sizeof(doors) / sizeof(doors[0]); i++)
+        {
+          String reqTopic = String(topicRequestPasswordDoorPrefix) + doors[i].id;
+
+          Serial.print("Requesting password for ");
+          Serial.println(doors[i].id);
+
+          mqtt.publish(reqTopic.c_str(), "GET_PASSWORD", false);
+        }
         passwordRequested = true;
       }
     }
@@ -644,13 +777,22 @@ void setup()
   Serial.println("\n\n=== LIVINGROOM SYSTEM STARTING ===");
 
   // Initialize pins
-  pinMode(LED_PIN, OUTPUT);
   pinMode(BUTTON_PIN, INPUT_PULLUP);
-  digitalWrite(LED_PIN, LOW);
-
+  for (int i = 0; i < sizeof(lights) / sizeof(lights[0]); i++)
+  {
+    pinMode(lights[i].pin, OUTPUT);
+    digitalWrite(lights[i].pin, LOW);
+  }
   // Initialize servo
-  doorServo.attach(SERVO_PIN);
-  doorServo.write(0);
+
+  for (int i = 0; i < sizeof(doors) / sizeof(doors[0]); i++)
+  {
+    doors[i].servo.attach(doors[i].pin);
+    doors[i].servo.write(0); // Lock door initially
+    doors[i].password = "1234";
+    Serial.print("Default password: ");
+    Serial.println(doors[i].password);
+  }
 
   // Initialize LCD
   lcd.init();
@@ -666,9 +808,6 @@ void setup()
   Serial.println("DHT22 initialized");
 
   // Set default password
-  doorPassword = "1234";
-  Serial.print("Default password: ");
-  Serial.println(doorPassword);
 
   // Connect WiFi
   connectWiFi();
@@ -742,10 +881,23 @@ void loop()
     Serial.println("Password change timeout");
   }
 
-  unsigned long lastOnline = currentMillis;
-  if(currentMillis - lastOnline >= ONLINE_INTERVAL) {
-    mqtt.publish(topicStatus.c_str(), "online", true);
-  }
+  // // Auto-lock door after 3 seconds
+  // if (!doorLocked && doorAutoLockTime > 0 && currentMillis >= doorAutoLockTime)
+  // {
+  //   doorLocked = true;
+  //   doorServo.write(0);
+  //   doorAutoLockTime = 0;
+
+  //   showLCDMessage("Door:", "AUTO-LOCKED");
+
+  //   if (mqtt.connected())
+  //   {
+  //     mqtt.publish(topicDoorStatus.c_str(), "LOCKED", false); // retained
+  //     lastPublishedDoor = doorLocked;
+  //   }
+
+  //   Serial.println("Door: AUTO-LOCKED");
+  // }
 
   delay(10);
 }

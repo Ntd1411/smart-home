@@ -18,7 +18,7 @@
       "top": 125.1,
       "left": 244.2,
       "rotate": 90,
-      "attrs": {}
+      "attrs": { "temperature": "69.2", "humidity": "91.5" }
     },
     {
       "type": "wokwi-text",
@@ -42,7 +42,21 @@
       "rotate": 90,
       "attrs": {}
     },
-    { "type": "wokwi-membrane-keypad", "id": "keypad1", "top": 161.2, "left": 360.8, "attrs": {} }
+    { "type": "wokwi-membrane-keypad", "id": "keypad1", "top": 161.2, "left": 360.8, "attrs": {} },
+    {
+      "type": "wokwi-led",
+      "id": "led2",
+      "top": -13.2,
+      "left": -159.4,
+      "attrs": { "color": "white" }
+    },
+    {
+      "type": "wokwi-led",
+      "id": "led3",
+      "top": -42,
+      "left": -255.4,
+      "attrs": { "color": "white" }
+    }
   ],
   "connections": [
     [ "esp:TX", "$serialMonitor:RX", "", [] ],
@@ -83,7 +97,11 @@
       "esp:0",
       "yellow",
       [ "v9.6", "h143.7", "v-537.6", "h-518.4", "v115.2", "h38.4", "v67.2" ]
-    ]
+    ],
+    [ "led2:A", "esp:27", "green", [ "v0" ] ],
+    [ "led2:C", "esp:GND.1", "green", [ "v0" ] ],
+    [ "led3:C", "esp:GND.1", "green", [ "v0" ] ],
+    [ "led3:A", "esp:14", "green", [ "v0" ] ]
   ],
   "dependencies": {}
 }
