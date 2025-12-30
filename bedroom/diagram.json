@@ -48,7 +48,9 @@
       "left": -149.1,
       "rotate": 270,
       "attrs": { "delayTime": "1" }
-    }
+    },
+    { "type": "wokwi-led", "id": "led2", "top": 198, "left": -274.6, "attrs": { "color": "red" } },
+    { "type": "wokwi-servo", "id": "servo1", "top": 286, "left": -19.2, "attrs": {} }
   ],
   "connections": [
     [ "esp:TX", "$serialMonitor:RX", "", [] ],
@@ -70,7 +72,12 @@
     [ "btn1:1.r", "esp:13", "blue", [ "v0", "h9.8", "v105.6" ] ],
     [ "pir1:GND", "esp:GND.1", "black", [ "h0", "v-134.14" ] ],
     [ "pir1:OUT", "esp:25", "green", [ "h9.6", "v-191.86" ] ],
-    [ "pir1:VCC", "esp:5V", "red", [ "h28.8", "v-96" ] ]
+    [ "pir1:VCC", "esp:5V", "red", [ "h28.8", "v-96" ] ],
+    [ "led2:A", "esp:12", "green", [ "v-96", "h259.2" ] ],
+    [ "led2:C", "esp:GND.1", "green", [ "v0" ] ],
+    [ "servo1:V+", "esp:5V", "green", [ "h0" ] ],
+    [ "servo1:GND", "esp:GND.1", "black", [ "h0" ] ],
+    [ "servo1:PWM", "esp:15", "green", [ "h0" ] ]
   ],
   "dependencies": {}
 }
